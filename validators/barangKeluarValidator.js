@@ -8,7 +8,7 @@ const requiredFields = [
   'status',
 ];
 
-const allowedStatus = ['C', 'LUNAS', 'PIUTANG', 'LOAN'];
+const allowedStatus = ['C', 'L'];
 
 const isEmpty = (value) => value === undefined || value === null || value === '';
 
@@ -20,7 +20,7 @@ const validateBarangKeluarPayload = (body) => {
   }
 
   if (!allowedStatus.includes(body.status)) {
-    return `Status hanya boleh: ${allowedStatus.join(', ')}`;
+    return `Status harus salah satu dari: ${allowedStatus.join(', ')}`;
   }
 
   return null;
