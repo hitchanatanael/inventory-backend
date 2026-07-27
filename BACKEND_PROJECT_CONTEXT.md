@@ -26,6 +26,8 @@ Technology stack from `package.json`:
 | `express` | `^5.2.1` | HTTP server, routing, and JSON body parsing via `express.json()`. |
 | `cors` | `^2.8.6` | Global default CORS middleware via `app.use(cors())`. |
 | `dotenv` | `^17.4.2` | Loads environment variables from `.env`. |
+| `bcryptjs` | `^3.0.3` | Password hashing and password comparison for authentication. |
+| `jsonwebtoken` | `^9.0.3` | JWT creation and verification for authentication. |
 | `mysql2` | `^3.22.5` | MySQL driver. The promise API is used through `mysql2/promise`. |
 | `nodemon` | `^3.1.14` | Development-only server restart utility. |
 
@@ -50,14 +52,14 @@ Scripts:
 | --- | --- | --- |
 | `npm run dev` | `nodemon app.js` | Development server with automatic restart. |
 | `npm start` | `node app.js` | Production/basic server start. |
+| `npm run create-super-admin` | `node scripts/createSuperAdmin.js` | Creates the first Super Admin user using existing `roles` and `users` tables. |
 
 Authentication-related state:
 
 ```text
-Authentication is not implemented.
-Authorization is not implemented.
-All mounted API routes are currently public unless protected outside this repository.
-JWT-related variables are not implemented.
+Authentication core is implemented.
+Existing inventory routes are not yet protected.
+Location scoping is prepared but not yet applied to inventory modules.
 ```
 
 ## 2. Folder Structure
@@ -76,7 +78,10 @@ inventory-backend/
 |-- package.json
 |-- config/
 |   `-- db.js
+|-- constants/
+|   `-- roles.js
 |-- controllers/
+|   |-- authController.js
 |   |-- barangKeluarController.js
 |   |-- barangMasukController.js
 |   |-- exampleController.js
@@ -85,8 +90,10 @@ inventory-backend/
 |   |-- masterBarangController.js
 |   `-- stokBarangController.js
 |-- middleware/
-|   `-- .gitkeep
+|   |-- .gitkeep
+|   `-- authMiddleware.js
 |-- routes/
+|   |-- authRoutes.js
 |   |-- barangKeluarRoutes.js
 |   |-- barangMasukRoutes.js
 |   |-- exampleRoutes.js
@@ -96,7 +103,10 @@ inventory-backend/
 |   `-- stokBarangRoutes.js
 |-- sql/
 |   `-- alter_barang_keluar_status_to_cash_loan.sql
+|-- scripts/
+|   `-- createSuperAdmin.js
 |-- services/
+|   |-- authService.js
 |   |-- barangKeluarService.js
 |   |-- barangMasukService.js
 |   |-- lokasiService.js
@@ -106,6 +116,7 @@ inventory-backend/
 |-- utils/
 |   `-- response.js
 `-- validators/
+    |-- authValidator.js
     |-- barangKeluarValidator.js
     |-- barangMasukValidator.js
     |-- lokasiValidator.js
@@ -120,13 +131,15 @@ Folder and file responsibilities:
 | --- | --- |
 | `app.js` | Main Express application and server startup file. Loads env, registers middleware, mounts routes, defines fallback 404, and calls `app.listen`. |
 | `config/db.js` | Creates and exports the MySQL promise connection pool. |
+| `constants/roles.js` | Role-name constants for `SUPER ADMIN` and `ADMIN`. |
 | `routes/` | Express router modules. Each route file maps HTTP methods and paths to controller functions. |
 | `controllers/` | HTTP request handlers. Controllers read params/query/body, call validators, call services, and format responses. |
 | `services/` | Database queries, persistence logic, stock validation, and transaction calculations. |
 | `sql/` | Manual SQL migration files. Currently contains a focused migration for `barang_keluar.status` compatibility with `C`/`L`. |
+| `scripts/createSuperAdmin.js` | CLI script for creating the first Super Admin user. |
 | `validators/` | Manual request body/query validators. |
 | `utils/response.js` | Shared JSON response helper for most business controllers. |
-| `middleware/` | Placeholder folder only. No implemented middleware exists. |
+| `middleware/` | Authentication, role, and location-scope middleware foundation. |
 | `BACKEND_CONTEXT.md`, `BACKEND_TREE.md` | Existing documentation files. They are not imported by runtime code. |
 | `package.json`, `package-lock.json` | npm metadata, dependency versions, scripts, and lockfile. |
 | `.env.example` | Example environment variable names and default-like local values. |
@@ -179,6 +192,7 @@ Mounted route prefixes:
 | Prefix | Route Module |
 | --- | --- |
 | `/api/examples` | `routes/exampleRoutes.js` |
+| `/api/auth` | `routes/authRoutes.js` |
 | `/api/master-barang` | `routes/masterBarangRoutes.js` |
 | `/api/master-anggota` | `routes/masterAnggotaRoutes.js` |
 | `/api/lokasi` | `routes/lokasiRoutes.js` |
@@ -256,6 +270,9 @@ Environment variables listed in `.env.example` and/or consumed by source:
 | `DB_PASSWORD` | Depends on local DB | None in source | `config/db.js` | MySQL password. |
 | `DB_NAME` | Yes for DB access | None in source | `config/db.js` | MySQL database name. |
 | `DB_PORT` | No | `3306` | `config/db.js` | MySQL port. Source uses `Number(process.env.DB_PORT) || 3306`. |
+| `JWT_SECRET` | Yes for auth | None | `controllers/authController.js`, `middleware/authMiddleware.js` | Secret used to sign and verify JWTs. Must not be logged or exposed. |
+| `JWT_EXPIRES_IN` | No | `8h` | `controllers/authController.js` | JWT expiration passed to `jsonwebtoken`. |
+| `BCRYPT_SALT_ROUNDS` | No | `10` | `scripts/createSuperAdmin.js` | Salt rounds used when hashing the initial Super Admin password. |
 
 `.env.example` contains:
 
@@ -266,6 +283,9 @@ DB_USER=root
 DB_PASSWORD=
 DB_NAME=inventory_pupuk
 DB_PORT=3306
+JWT_SECRET=
+JWT_EXPIRES_IN=8h
+BCRYPT_SALT_ROUNDS=10
 ```
 
 Security note:
@@ -277,10 +297,10 @@ Do not expose real .env secret values.
 Authentication/JWT/session variables:
 
 ```text
-JWT_SECRET is not implemented.
-JWT expiration variables are not implemented.
+JWT_SECRET is required before generating or verifying tokens.
+JWT_EXPIRES_IN defaults to 8h.
 Session variables are not implemented.
-Password-related variables are not implemented.
+BCRYPT_SALT_ROUNDS defaults to 10.
 ```
 
 ## 5. Database Connection
@@ -371,6 +391,91 @@ No `decimalNumbers`, `supportBigNumbers`, or custom type casting options are con
 ## 6. Current Database Model
 
 No full DDL/schema dump exists in the repository. One focused migration exists for the Barang Keluar status enum, but primary keys, foreign keys, nullability, indexes, and most column types are still mostly inferred from selected/inserted/updated columns and joins.
+
+### `roles`
+
+Purpose:
+
+- Stores existing role master data for authentication and authorization decisions.
+- Phase 1 uses role names exactly as stored in the database.
+
+Observed columns from the local database audit:
+
+| Column | Type Observed | Usage |
+| --- | --- | --- |
+| `id` | `int`, primary key, auto increment | Selected and stored in `users.id_role`; not used directly for authorization decisions. |
+| `nama_role` | `varchar(50)`, unique | Selected and compared to role constants. |
+| `created_at` | `timestamp`, nullable, default current timestamp | Selected by `findRoleByName`. |
+| `updated_at` | `timestamp`, nullable, auto-updated | Selected by `findRoleByName`. |
+
+Existing role rows observed:
+
+| id | nama_role |
+| --- | --- |
+| `1` | `SUPER ADMIN` |
+| `2` | `ADMIN` |
+
+Current role constants:
+
+```js
+const ROLE_SUPER_ADMIN = 'SUPER ADMIN';
+const ROLE_ADMIN = 'ADMIN';
+```
+
+Important auth rule:
+
+- Authorization decisions are based on `nama_role`, not hardcoded role IDs.
+- Role IDs are used only after looking up a role by `nama_role`, such as when creating the first Super Admin.
+
+### `users`
+
+Purpose:
+
+- Stores backend users for Phase 1 authentication.
+- The table already exists and is not recreated by the backend.
+
+Observed columns from the local database audit:
+
+| Column | Type Observed | Usage |
+| --- | --- | --- |
+| `id` | `int`, primary key, auto increment | Minimal JWT payload and user lookup key. |
+| `id_role` | `int`, indexed, not null | Joins to `roles.id`. |
+| `id_lokasi` | `int`, indexed, nullable | Joins to `lokasi.id`; must be `NULL` for `SUPER ADMIN`; required for `ADMIN`. |
+| `nama` | `varchar(100)`, not null | Safe user display field. |
+| `username` | `varchar(100)`, unique, not null | Login identifier. |
+| `password_hash` | `varchar(255)`, not null | Internal bcrypt password hash; never returned in API responses. |
+| `is_active` | `tinyint(1)`, nullable, default `1` | Login and middleware reject inactive users. |
+| `created_at` | `timestamp`, nullable, default current timestamp | Safe current-user data. |
+| `updated_at` | `timestamp`, nullable, auto-updated | Safe current-user data. |
+
+Expected relationships:
+
+```text
+users.id_role -> roles.id
+users.id_lokasi -> lokasi.id
+```
+
+Foreign keys and indexes:
+
+- The local database audit shows indexes on `users.id_role`, `users.id_lokasi`, and a unique key on `users.username`.
+- The local database audit verified `users.id_role -> roles.id` through constraint `fk_users_role`.
+- The local database audit verified `users.id_lokasi -> lokasi.id` through constraint `fk_users_lokasi`.
+- These constraints are not represented in repository SQL files because no full schema dump exists.
+
+Role-location rules:
+
+| Role | Rule |
+| --- | --- |
+| `SUPER ADMIN` | `id_lokasi` must be `NULL`. |
+| `ADMIN` | `id_lokasi` must be a positive integer and must resolve to a valid `lokasi` row. |
+
+Backend modules:
+
+| Module | Reads | Writes |
+| --- | --- | --- |
+| Auth login | Reads user, role, and location data. | No |
+| Auth middleware | Reads current user, role, and location data on protected requests. | No |
+| Super Admin script | Reads role and duplicate username; inserts the first Super Admin user. | Yes |
 
 ### `lokasi`
 
@@ -814,6 +919,7 @@ Mounted API base paths:
 | Base Path | Module |
 | --- | --- |
 | `http://localhost:5000/api/examples` | Example |
+| `http://localhost:5000/api/auth` | Authentication |
 | `http://localhost:5000/api/master-barang` | Master Barang |
 | `http://localhost:5000/api/master-anggota` | Master Anggota |
 | `http://localhost:5000/api/lokasi` | Lokasi |
@@ -827,6 +933,8 @@ Route inventory by module:
 | --- | --- | --- | --- |
 | `GET` | `http://localhost:5000/` | inline in `app.js` | Root server message. |
 | `GET` | `http://localhost:5000/api/examples` | `exampleController.getExamples` | Test/example DB query. |
+| `POST` | `http://localhost:5000/api/auth/login` | `authController.login` | Login with username/password and receive a JWT. |
+| `GET` | `http://localhost:5000/api/auth/me` | `authController.getCurrentUser` | Protected current-user endpoint using `authenticateToken`. |
 | `GET` | `http://localhost:5000/api/master-barang` | `masterBarangController.getAllMasterBarang` | List all goods. |
 | `GET` | `http://localhost:5000/api/master-barang/:id` | `masterBarangController.getMasterBarangById` | Get one goods row by ID. |
 | `POST` | `http://localhost:5000/api/master-barang` | `masterBarangController.createMasterBarang` | Create goods. |
@@ -856,6 +964,283 @@ Route inventory by module:
 | `GET` | `http://localhost:5000/api/stok-barang/ringkasan` | `stokBarangController.getRingkasanStokBarang` | Get overall and per-location stock summary. |
 
 ## 10. Module Documentation
+
+### Authentication Module
+
+#### Purpose
+
+The Authentication module implements Phase 1 backend authentication using the existing `users`, `roles`, and `lokasi` tables. It provides login, JWT creation, an authenticated current-user endpoint, role middleware foundation, location-scope middleware foundation, and a CLI script for creating the first Super Admin.
+
+Current Phase 1 boundary:
+
+```text
+Authentication core is implemented.
+Existing inventory routes are not yet protected.
+Location scoping is prepared but not yet applied to inventory modules.
+```
+
+#### Files
+
+| Type | File |
+| --- | --- |
+| Route | `routes/authRoutes.js` |
+| Controller | `controllers/authController.js` |
+| Validator | `validators/authValidator.js` |
+| Service | `services/authService.js` |
+| Middleware | `middleware/authMiddleware.js` |
+| Constants | `constants/roles.js` |
+| Script | `scripts/createSuperAdmin.js` |
+
+#### Endpoints
+
+```http
+POST http://localhost:5000/api/auth/login
+GET http://localhost:5000/api/auth/me
+```
+
+`GET /api/auth/me` is protected with `authenticateToken`.
+
+#### Login Request Payload
+
+```json
+{
+  "username": "admin",
+  "password": "strong-password"
+}
+```
+
+`username` is normalized using `String(value).trim()`. It is not lowercased by backend code.
+
+#### Login Response
+
+Success response:
+
+```json
+{
+  "success": true,
+  "message": "Login berhasil",
+  "data": {
+    "token": "<jwt>",
+    "user": {
+      "id": 1,
+      "id_role": 1,
+      "id_lokasi": null,
+      "nama": "Super Admin",
+      "username": "admin",
+      "nama_role": "SUPER ADMIN",
+      "nama_lokasi": null
+    }
+  }
+}
+```
+
+The login response does not return `password_hash`, `JWT_SECRET`, or `is_active`.
+
+JWT payload:
+
+```js
+{
+  id: user.id
+}
+```
+
+The JWT does not contain role, location, username, display name, password hash, or a full user record. Role and location are fetched from the database on protected requests.
+
+#### Current User Response
+
+```json
+{
+  "success": true,
+  "message": "Data pengguna berhasil diambil",
+  "data": {
+    "id": 1,
+    "id_role": 1,
+    "id_lokasi": null,
+    "nama": "Super Admin",
+    "username": "admin",
+    "nama_role": "SUPER ADMIN",
+    "nama_lokasi": null,
+    "is_active": 1
+  }
+}
+```
+
+The current-user endpoint refetches safe user data from the current database row and does not return `password_hash`.
+
+#### Validation Rules
+
+Login validator:
+
+| Field | Rule | Message |
+| --- | --- | --- |
+| `username` | Required after trim. | `Username wajib diisi` |
+| `password` | Required. | `Password wajib diisi` |
+
+Invalid username or password uses the same generic response:
+
+```text
+HTTP 401
+Username atau password salah
+```
+
+Inactive user:
+
+```text
+HTTP 403
+Akun tidak aktif
+```
+
+Invalid role:
+
+```text
+HTTP 403
+Role pengguna tidak valid
+```
+
+Invalid ADMIN location assignment:
+
+```text
+HTTP 403
+Akun belum memiliki lokasi yang valid
+```
+
+#### Role and Location Rules
+
+Role names are defined in `constants/roles.js`:
+
+```js
+const ROLE_SUPER_ADMIN = 'SUPER ADMIN';
+const ROLE_ADMIN = 'ADMIN';
+```
+
+Rules:
+
+| Role | Rule |
+| --- | --- |
+| `SUPER ADMIN` | `id_lokasi` must be `NULL`. |
+| `ADMIN` | `id_lokasi` must be a positive integer and join to a valid `lokasi` row. |
+
+Unknown roles are rejected. The backend does not silently correct invalid role-location combinations.
+
+#### Authentication Middleware
+
+`authenticateToken` reads only:
+
+```http
+Authorization: Bearer <token>
+```
+
+It does not accept tokens from query parameters, request bodies, or cookies.
+
+Behavior:
+
+| Case | Status | Message |
+| --- | --- | --- |
+| Missing token | `401` | `Token autentikasi diperlukan` |
+| Invalid/expired token | `401` | `Token tidak valid atau telah kedaluwarsa` |
+| Token user missing | `401` | `Pengguna tidak ditemukan` |
+| User inactive | `403` | `Akun tidak aktif` |
+| Invalid role | `403` | `Role pengguna tidak valid` |
+| Invalid location assignment | `403` | `Akun belum memiliki lokasi yang valid` |
+
+For valid tokens, middleware fetches current user data from the database and sets:
+
+```js
+req.user = {
+  id,
+  id_role,
+  id_lokasi,
+  nama,
+  username,
+  nama_role,
+  nama_lokasi
+};
+```
+
+It does not trust role or location values from the JWT.
+
+#### Role Middleware Foundation
+
+`requireRole(...allowedRoles)` is implemented for future use:
+
+```js
+router.get(
+  '/users',
+  authenticateToken,
+  requireRole(ROLE_SUPER_ADMIN),
+  controller
+);
+```
+
+If the current user role is not allowed, it returns:
+
+```text
+HTTP 403
+Anda tidak memiliki akses ke fitur ini
+```
+
+This middleware is not yet applied to inventory routes.
+
+#### Location Scope Foundation
+
+`attachLocationScope` derives scope only from `req.user.nama_role` and `req.user.id_lokasi`.
+
+For `SUPER ADMIN`:
+
+```js
+req.locationScope = {
+  isSuperAdmin: true,
+  id_lokasi: null
+};
+```
+
+For `ADMIN`:
+
+```js
+req.locationScope = {
+  isSuperAdmin: false,
+  id_lokasi: req.user.id_lokasi
+};
+```
+
+It does not read `id_lokasi` from `req.body`, `req.query`, or `req.params`. This middleware is not yet applied to inventory routes.
+
+#### Super Admin Creation Script
+
+Script:
+
+```text
+scripts/createSuperAdmin.js
+```
+
+npm command:
+
+```bash
+npm run create-super-admin -- --nama="Super Admin" --username="admin" --password="strong-password"
+```
+
+Behavior:
+
+- Loads environment variables.
+- Parses `--nama`, `--username`, and `--password`.
+- Requires a password of at least 8 characters.
+- Looks up role by `nama_role = 'SUPER ADMIN'`.
+- Does not hardcode role ID.
+- Rejects duplicate usernames.
+- Hashes the password with `bcryptjs` and `BCRYPT_SALT_ROUNDS`.
+- Inserts into `users` with `id_lokasi = NULL` and `is_active = 1`.
+- Does not print the plain password.
+- Closes the database pool before exit.
+
+#### Known Limitations
+
+- No public registration endpoint.
+- No refresh token.
+- No logout/token blacklist.
+- No password reset.
+- No user CRUD.
+- Existing inventory routes remain public in Phase 1.
+- Location scoping is prepared but not applied to inventory modules.
 
 ### Example Module
 
@@ -2200,7 +2585,7 @@ Usage:
 | Barang Keluar | Create/update payload accepts `id_lokasi`; list filter uses `id_lokasi`; stock validation uses `id_lokasi`. |
 | Stok Barang | List filter uses `id_lokasi`; summary groups by location fields from view. |
 
-Location is currently selected or submitted manually by the client. No authentication middleware sets location, and no authorization layer restricts which location can be submitted.
+Location is currently selected or submitted manually by the client in inventory modules. Authentication middleware exists, but it is not yet applied to inventory routes, so no authorization layer currently restricts which location can be submitted there.
 
 ## 14. Barang Masuk Module Details
 
@@ -2666,28 +3051,44 @@ Known weaknesses proven by code:
 Authentication:
 
 ```text
-Authentication is not implemented.
+Authentication core is implemented.
 ```
+
+Implemented auth surfaces:
+
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `authenticateToken` middleware
 
 Authorization:
 
 ```text
-Authorization is not implemented.
+Authorization middleware foundation is implemented, but not yet applied to inventory routes.
 ```
 
 Passwords:
 
 ```text
-Not implemented.
+Passwords are stored as bcrypt hashes in users.password_hash.
 ```
 
-There is no user table or password handling code.
+`password_hash` is never returned by auth responses.
 
 JWT:
 
 ```text
-Not implemented.
+JWT creation and verification are implemented.
 ```
+
+The token payload is minimal:
+
+```js
+{
+  id: user.id
+}
+```
+
+Role and location values are fetched from the database on protected requests.
 
 Sessions:
 
@@ -2698,24 +3099,24 @@ Not implemented.
 Protected routes:
 
 ```text
-Not implemented.
+GET /api/auth/me is protected.
 ```
 
-All mounted API routes are public in this application code.
+Existing inventory routes are not yet protected in Phase 1.
 
 Role checks:
 
 ```text
-Not implemented.
+requireRole(...allowedRoles) is implemented for future use.
 ```
 
 Location checks:
 
 ```text
-Not implemented.
+attachLocationScope is implemented for future use.
 ```
 
-Location IDs are accepted from request payloads or query parameters and trusted.
+Inventory modules still accept `id_lokasi` from request payloads or query parameters because Phase 1 does not apply location scoping to inventory routes.
 
 CORS:
 
@@ -2746,30 +3147,31 @@ Sensitive error exposure:
 
 - Main CRUD controllers hide errors.
 - `exampleController` exposes `error.message`.
+- Auth controllers and middleware return generic auth/JWT/bcrypt failure messages and do not expose secrets, password hashes, stack traces, or JWT library errors.
 
 ## 22. Location-Scoping Readiness
 
 Future account model mentioned for planning:
 
 ```text
-Super Admin
-Admin Pusat
-Admin Suban
+SUPER ADMIN
+ADMIN
 ```
 
 Future request context concept:
 
 ```js
 req.user.id_lokasi
-req.user.role
+req.user.nama_role
 ```
 
 Current implementation status:
 
 ```text
-req.user is not implemented.
-Authentication middleware is not implemented.
-Location-scoping middleware is not implemented.
+req.user is implemented by authenticateToken for protected auth routes.
+Role middleware foundation is implemented.
+Location-scope middleware foundation is implemented.
+Inventory routes are not yet protected or location-scoped.
 ```
 
 Tables/views containing or exposing `id_lokasi`:
@@ -2845,7 +3247,7 @@ Future middleware integration points:
 | --- | --- |
 | `app.js` | Register authentication middleware before API routes. |
 | `routes/*` | Add route-level authorization middleware if roles differ per route. |
-| `controllers/*` | Read `req.user.role` and `req.user.id_lokasi` or pass scope to service. |
+| `controllers/*` | Read `req.user.nama_role` and `req.user.id_lokasi` or pass scope to service. |
 | `services/*` | Add scoped WHERE clauses and scoped existence checks. |
 | `validators/*` | Keep validating shape, but do not trust body `id_lokasi` for authorization. |
 
@@ -2858,7 +3260,7 @@ Future Super Admin behavior:
 
 Future location admin behavior:
 
-- `Admin Pusat` / `Admin Suban` should be restricted to assigned `req.user.id_lokasi`.
+- `ADMIN` users should be restricted to assigned `req.user.id_lokasi`.
 - Payload `id_lokasi` should either be ignored and replaced with `req.user.id_lokasi`, or validated to equal `req.user.id_lokasi`.
 - Detail/update/delete should verify the target row belongs to the authorized location.
 - Stock summary should filter to assigned location unless role allows all.
@@ -2929,6 +3331,8 @@ Not implemented for every endpoint.
 | --- | --- | --- | --- | --- | --- | --- |
 | `GET` | `http://localhost:5000/` | Root | inline | Not implemented | Not implemented | Server message. |
 | `GET` | `http://localhost:5000/api/examples` | Example | `getExamples` | Not implemented | Not implemented | Example DB query. |
+| `POST` | `http://localhost:5000/api/auth/login` | Authentication | `login` | Not required | Not implemented | Validate credentials and return JWT plus safe user data. |
+| `GET` | `http://localhost:5000/api/auth/me` | Authentication | `getCurrentUser` | `authenticateToken` | Prepared but not applied as inventory scope | Return safe current user data from the database. |
 | `GET` | `http://localhost:5000/api/master-anggota` | Master Anggota | `getAllMasterAnggota` | Not implemented | Not implemented | List members. |
 | `GET` | `http://localhost:5000/api/master-anggota/:id` | Master Anggota | `getMasterAnggotaById` | Not implemented | Not implemented | Member detail. |
 | `POST` | `http://localhost:5000/api/master-anggota` | Master Anggota | `createMasterAnggota` | Not implemented | Not implemented | Create member. |
@@ -3081,10 +3485,11 @@ Proven limitations:
 
 | Limitation | Evidence |
 | --- | --- |
-| No authentication | No auth middleware/routes/models/env vars. |
-| No authorization | No role checks or protected routes. |
-| No user table referenced | No user service/controller/table references. |
-| Location trusted from client | `id_lokasi` accepted in body/query without `req.user`. |
+| Inventory routes are not authenticated | Phase 1 only protects `/api/auth/me`; existing inventory modules remain public. |
+| Inventory routes are not authorized | `requireRole` exists but is not applied to inventory route modules. |
+| Inventory routes are not location-scoped | `attachLocationScope` exists but is not applied to inventory route modules. |
+| No user CRUD or public registration | Only login/current-user and initial Super Admin script are implemented. |
+| Location trusted from client in inventory modules | `id_lokasi` is still accepted in inventory body/query payloads because Phase 2 scoping is not applied. |
 | No audit log | No audit table/service/middleware. |
 | No database transaction around stock-sensitive writes | No transaction API usage. |
 | Race condition between stock check and insert/update | `validateAvailableStock` and write are separate queries. |
@@ -3136,8 +3541,9 @@ Affected files/modules:
 
 Affected modules:
 
-- New users table/model/service.
-- Auth routes for login/current user.
+- Existing `users` table.
+- Auth routes for login/current user are implemented.
+- Future user CRUD should build on `users`, not create a replacement table.
 - Existing controllers may need `req.user`.
 
 ### Role Management
@@ -3145,16 +3551,15 @@ Affected modules:
 Future role concept:
 
 ```text
-Super Admin
-Admin Pusat
-Admin Suban
+SUPER ADMIN
+ADMIN
 ```
 
 Affected areas:
 
-- Auth middleware should attach `req.user.role`.
+- Auth middleware attaches `req.user.nama_role`.
 - Authorization middleware should check role per route.
-- `lokasi` management likely Super Admin only.
+- `lokasi` management will likely be restricted to `SUPER ADMIN`.
 
 ### Location-Based Authorization
 
@@ -3162,7 +3567,7 @@ Future scope concept:
 
 ```js
 req.user.id_lokasi
-req.user.role
+req.user.nama_role
 ```
 
 Affected modules:
@@ -3243,7 +3648,7 @@ Potential impact:
 
 - New admin-only routes/scripts.
 - Requires careful database credential and filesystem handling.
-- Should be restricted to Super Admin.
+- Should be restricted to `SUPER ADMIN`.
 
 ### Dashboard Finalization
 

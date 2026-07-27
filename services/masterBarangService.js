@@ -18,7 +18,7 @@ const baseSelectQuery = `
 const getAllMasterBarang = async () => {
   const [rows] = await db.query(
     `${baseSelectQuery}
-     ORDER BY mb.nama_barang ASC`
+     ORDER BY mb.id ASC`
   );
 
   return rows;

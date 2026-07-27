@@ -4,9 +4,45 @@ const {
   validateBarangMasukPayload,
 } = require('../validators/barangMasukValidator');
 
+const buildBarangMasukFilters = (query) => {
+  const filters = {};
+
+  if (query.bulan !== undefined && query.bulan !== '') {
+    const bulan = Number(query.bulan);
+
+    if (!Number.isInteger(bulan) || bulan < 1 || bulan > 12) {
+      return {
+        error: 'Filter bulan harus berupa angka 1 sampai 12',
+      };
+    }
+
+    filters.bulan = bulan;
+  }
+
+  if (query.tp !== undefined && query.tp !== '') {
+    const tp = Number(query.tp);
+
+    if (!Number.isInteger(tp) || tp < 1) {
+      return {
+        error: 'Filter TP harus berupa id_lokasi yang valid',
+      };
+    }
+
+    filters.tp = tp;
+  }
+
+  return { filters };
+};
+
 const getAllBarangMasuk = async (req, res) => {
   try {
-    const data = await barangMasukService.getAllBarangMasuk();
+    const { filters, error } = buildBarangMasukFilters(req.query);
+
+    if (error) {
+      return response.error(res, error, 400);
+    }
+
+    const data = await barangMasukService.getAllBarangMasuk(filters);
 
     return response.success(res, 'Data barang masuk berhasil diambil', data);
   } catch (error) {
