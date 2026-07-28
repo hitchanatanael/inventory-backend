@@ -109,8 +109,23 @@ const calculateTransaction = async (payload) => {
   };
 };
 
-const getAllBarangKeluar = async (filters = {}) => {
-  const { bulan, tahun, id_lokasi, search } = filters;
+const getScopedLocationId = (scope, requestedLocationId) => {
+  if (scope && !scope.isSuperAdmin) {
+    return scope.id_lokasi;
+  }
+
+  return requestedLocationId;
+};
+
+const addScopeCondition = (conditions, params, scope) => {
+  if (scope && !scope.isSuperAdmin) {
+    conditions.push('bk.id_lokasi = ?');
+    params.push(scope.id_lokasi);
+  }
+};
+
+const buildBarangKeluarConditions = (filters = {}, scope = null) => {
+  const { bulan, tahun, id_lokasi, search, status } = filters;
   const conditions = [];
   const params = [];
 
@@ -124,9 +139,16 @@ const getAllBarangKeluar = async (filters = {}) => {
     params.push(tahun);
   }
 
-  if (id_lokasi !== undefined) {
+  const scopedLocationId = getScopedLocationId(scope, id_lokasi);
+
+  if (scopedLocationId !== undefined) {
     conditions.push('bk.id_lokasi = ?');
-    params.push(id_lokasi);
+    params.push(scopedLocationId);
+  }
+
+  if (status) {
+    conditions.push('bk.status = ?');
+    params.push(status);
   }
 
   if (search) {
@@ -145,42 +167,86 @@ const getAllBarangKeluar = async (filters = {}) => {
     params.push(keyword, keyword, keyword, keyword, keyword);
   }
 
-  const whereClause = conditions.length
-    ? `WHERE ${conditions.join(' AND ')}`
-    : '';
+  return {
+    whereClause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+};
+
+const getAllBarangKeluar = async (filters = {}, scope = null) => {
+  const { whereClause, params } = buildBarangKeluarConditions(filters, scope);
+  const pagination = filters.pagination;
+  const limitClause = pagination ? 'LIMIT ? OFFSET ?' : '';
+  const queryParams = pagination
+    ? [...params, pagination.limit, pagination.offset]
+    : params;
 
   const [rows] = await db.query(
     `${baseSelectQuery}
      ${whereClause}
-     ORDER BY bk.tanggal DESC, bk.id DESC`,
+     ORDER BY bk.tanggal DESC, bk.id DESC
+     ${limitClause}`,
+    queryParams
+  );
+
+  if (!pagination) {
+    return {
+      rows,
+    };
+  }
+
+  const [countRows] = await db.query(
+    `SELECT COUNT(*) AS total
+     FROM barang_keluar bk
+     LEFT JOIN master_anggota ma ON ma.id = bk.id_master_anggota
+     JOIN master_barang mb ON mb.id = bk.id_master_barang
+     JOIN lokasi l ON l.id = bk.id_lokasi
+     ${whereClause}`,
     params
   );
 
-  return rows;
+  return {
+    rows,
+    pagination: {
+      page: pagination.page,
+      limit: pagination.limit,
+      total: countRows[0].total,
+      total_pages: Math.ceil(countRows[0].total / pagination.limit),
+    },
+  };
 };
 
-const getBarangKeluarById = async (id) => {
+const getBarangKeluarById = async (id, scope = null) => {
+  const conditions = ['bk.id = ?'];
+  const params = [id];
+
+  addScopeCondition(conditions, params, scope);
+
   const [rows] = await db.query(
     `${baseSelectQuery}
-     WHERE bk.id = ?
+     WHERE ${conditions.join(' AND ')}
      LIMIT 1`,
-    [id]
+    params
   );
 
   return rows[0] || null;
 };
 
-const createBarangKeluar = async (payload) => {
+const createBarangKeluar = async (payload, scope = null) => {
   const {
     tanggal,
     id_master_barang,
-    id_lokasi,
     jumlah,
     harga_jual,
     jumlah_bayar,
     status,
   } = payload;
-  const calculation = await calculateTransaction(payload);
+  const id_lokasi = getScopedLocationId(scope, payload.id_lokasi);
+  const scopedPayload = {
+    ...payload,
+    id_lokasi,
+  };
+  const calculation = await calculateTransaction(scopedPayload);
 
   if (!calculation) {
     return null;
@@ -223,11 +289,11 @@ const createBarangKeluar = async (payload) => {
     ]
   );
 
-  return getBarangKeluarById(result.insertId);
+  return getBarangKeluarById(result.insertId, scope);
 };
 
-const updateBarangKeluar = async (id, payload) => {
-  const existingBarangKeluar = await getBarangKeluarById(id);
+const updateBarangKeluar = async (id, payload, scope = null) => {
+  const existingBarangKeluar = await getBarangKeluarById(id, scope);
 
   if (!existingBarangKeluar) {
     return null;
@@ -236,13 +302,17 @@ const updateBarangKeluar = async (id, payload) => {
   const {
     tanggal,
     id_master_barang,
-    id_lokasi,
     jumlah,
     harga_jual,
     jumlah_bayar,
     status,
   } = payload;
-  const calculation = await calculateTransaction(payload);
+  const id_lokasi = getScopedLocationId(scope, payload.id_lokasi);
+  const scopedPayload = {
+    ...payload,
+    id_lokasi,
+  };
+  const calculation = await calculateTransaction(scopedPayload);
 
   if (!calculation) {
     return null;
@@ -298,11 +368,22 @@ const updateBarangKeluar = async (id, payload) => {
     ]
   );
 
-  return getBarangKeluarById(id);
+  return getBarangKeluarById(id, scope);
 };
 
-const deleteBarangKeluar = async (id) => {
-  const [result] = await db.query('DELETE FROM barang_keluar WHERE id = ?', [id]);
+const deleteBarangKeluar = async (id, scope = null) => {
+  const conditions = ['id = ?'];
+  const params = [id];
+
+  if (scope && !scope.isSuperAdmin) {
+    conditions.push('id_lokasi = ?');
+    params.push(scope.id_lokasi);
+  }
+
+  const [result] = await db.query(
+    `DELETE FROM barang_keluar WHERE ${conditions.join(' AND ')}`,
+    params
+  );
 
   return result.affectedRows > 0;
 };

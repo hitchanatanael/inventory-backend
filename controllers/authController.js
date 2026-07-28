@@ -26,20 +26,20 @@ const login = async (req, res) => {
       return response.error(res, 'Username atau password salah', 401);
     }
 
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+
+    if (!isPasswordValid) {
+      return response.error(res, 'Username atau password salah', 401);
+    }
+
     if (!user.is_active) {
-      return response.error(res, 'Akun tidak aktif', 403);
+      return response.error(res, 'Akun tidak aktif. Hubungi Super Admin.', 403);
     }
 
     const roleValidation = authService.validateUserRoleLocation(user);
 
     if (!roleValidation.isValid) {
       return response.error(res, roleValidation.message, 403);
-    }
-
-    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
-
-    if (!isPasswordValid) {
-      return response.error(res, 'Username atau password salah', 401);
     }
 
     const jwtSecret = getJwtSecret();

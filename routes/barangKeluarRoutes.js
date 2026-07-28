@@ -1,8 +1,15 @@
 const express = require('express');
 
 const barangKeluarController = require('../controllers/barangKeluarController');
+const {
+  authenticateToken,
+  attachLocationScope,
+} = require('../middleware/authMiddleware');
 
 const router = express.Router();
+
+router.use(authenticateToken);
+router.use(attachLocationScope);
 
 router.get('/', barangKeluarController.getAllBarangKeluar);
 router.get('/:id', barangKeluarController.getBarangKeluarById);

@@ -1,10 +1,13 @@
 const barangMasukService = require('../services/barangMasukService');
 const response = require('../utils/response');
 const {
+  validatePaginationQuery,
+} = require('../validators/paginationValidator');
+const {
   validateBarangMasukPayload,
 } = require('../validators/barangMasukValidator');
 
-const buildBarangMasukFilters = (query) => {
+const buildBarangMasukFilters = (query, scope) => {
   const filters = {};
 
   if (query.bulan !== undefined && query.bulan !== '') {
@@ -19,30 +22,91 @@ const buildBarangMasukFilters = (query) => {
     filters.bulan = bulan;
   }
 
-  if (query.tp !== undefined && query.tp !== '') {
-    const tp = Number(query.tp);
+  if (query.tahun !== undefined && query.tahun !== '') {
+    const tahun = Number(query.tahun);
 
-    if (!Number.isInteger(tp) || tp < 1) {
+    if (!Number.isInteger(tahun) || tahun < 1) {
       return {
-        error: 'Filter TP harus berupa id_lokasi yang valid',
+        error: 'Filter tahun harus berupa angka positif',
       };
     }
 
-    filters.tp = tp;
+    filters.tahun = tahun;
+  }
+
+  if (query.status !== undefined && query.status !== '') {
+    filters.status = String(query.status).trim();
+  }
+
+  if (query.search !== undefined && query.search !== '') {
+    filters.search = String(query.search).trim();
+  }
+
+  const paginationResult = validatePaginationQuery(query, { optional: true });
+
+  if (paginationResult.error) {
+    return {
+      error: paginationResult.error,
+    };
+  }
+
+  if (paginationResult.enabled) {
+    filters.pagination = paginationResult.pagination;
+  }
+
+  if (!scope || scope.isSuperAdmin) {
+    const locationFilter = query.tp !== undefined && query.tp !== ''
+      ? query.tp
+      : query.id_lokasi;
+
+    if (locationFilter !== undefined && locationFilter !== '') {
+      const tp = Number(locationFilter);
+
+      if (!Number.isInteger(tp) || tp < 1) {
+        return {
+          error: 'Filter TP harus berupa id_lokasi yang valid',
+        };
+      }
+
+      filters.tp = tp;
+    }
   }
 
   return { filters };
 };
 
+const resolveScopedPayload = (payload, scope) => {
+  if (scope && !scope.isSuperAdmin) {
+    return {
+      ...payload,
+      id_lokasi: scope.id_lokasi,
+    };
+  }
+
+  return payload;
+};
+
 const getAllBarangMasuk = async (req, res) => {
   try {
-    const { filters, error } = buildBarangMasukFilters(req.query);
+    const { filters, error } = buildBarangMasukFilters(
+      req.query,
+      req.locationScope
+    );
 
     if (error) {
       return response.error(res, error, 400);
     }
 
-    const data = await barangMasukService.getAllBarangMasuk(filters);
+    const result = await barangMasukService.getAllBarangMasuk(
+      filters,
+      req.locationScope
+    );
+    const data = result.pagination
+      ? {
+          barang_masuk: result.rows,
+          pagination: result.pagination,
+        }
+      : result.rows;
 
     return response.success(res, 'Data barang masuk berhasil diambil', data);
   } catch (error) {
@@ -52,7 +116,10 @@ const getAllBarangMasuk = async (req, res) => {
 
 const getBarangMasukById = async (req, res) => {
   try {
-    const data = await barangMasukService.getBarangMasukById(req.params.id);
+    const data = await barangMasukService.getBarangMasukById(
+      req.params.id,
+      req.locationScope
+    );
 
     if (!data) {
       return response.error(res, 'Data barang masuk tidak ditemukan', 404);
@@ -66,13 +133,17 @@ const getBarangMasukById = async (req, res) => {
 
 const createBarangMasuk = async (req, res) => {
   try {
-    const validationMessage = validateBarangMasukPayload(req.body);
+    const payload = resolveScopedPayload(req.body, req.locationScope);
+    const validationMessage = validateBarangMasukPayload(payload);
 
     if (validationMessage) {
       return response.error(res, validationMessage, 400);
     }
 
-    const data = await barangMasukService.createBarangMasuk(req.body);
+    const data = await barangMasukService.createBarangMasuk(
+      payload,
+      req.locationScope
+    );
 
     return response.success(res, 'Data barang masuk berhasil dibuat', data, 201);
   } catch (error) {
@@ -82,7 +153,8 @@ const createBarangMasuk = async (req, res) => {
 
 const updateBarangMasuk = async (req, res) => {
   try {
-    const validationMessage = validateBarangMasukPayload(req.body);
+    const payload = resolveScopedPayload(req.body, req.locationScope);
+    const validationMessage = validateBarangMasukPayload(payload);
 
     if (validationMessage) {
       return response.error(res, validationMessage, 400);
@@ -90,7 +162,8 @@ const updateBarangMasuk = async (req, res) => {
 
     const data = await barangMasukService.updateBarangMasuk(
       req.params.id,
-      req.body
+      payload,
+      req.locationScope
     );
 
     if (!data) {
@@ -105,7 +178,10 @@ const updateBarangMasuk = async (req, res) => {
 
 const deleteBarangMasuk = async (req, res) => {
   try {
-    const isDeleted = await barangMasukService.deleteBarangMasuk(req.params.id);
+    const isDeleted = await barangMasukService.deleteBarangMasuk(
+      req.params.id,
+      req.locationScope
+    );
 
     if (!isDeleted) {
       return response.error(res, 'Data barang masuk tidak ditemukan', 404);

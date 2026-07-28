@@ -10,6 +10,9 @@ const barangMasukRoutes = require('./routes/barangMasukRoutes');
 const barangKeluarRoutes = require('./routes/barangKeluarRoutes');
 const stokBarangRoutes = require('./routes/stokBarangRoutes');
 const authRoutes = require('./routes/authRoutes');
+const userRoutes = require('./routes/userRoutes');
+const roleRoutes = require('./routes/roleRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -25,6 +28,9 @@ app.get('/', (req, res) => {
 
 app.use('/api/examples', exampleRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/roles', roleRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/master-barang', masterBarangRoutes);
 app.use('/api/master-anggota', masterAnggotaRoutes);
 app.use('/api/lokasi', lokasiRoutes);

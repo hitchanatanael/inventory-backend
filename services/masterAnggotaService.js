@@ -11,13 +11,54 @@ const baseSelectQuery = `
   FROM master_anggota
 `;
 
-const getAllMasterAnggota = async () => {
+const buildMasterAnggotaConditions = (filters = {}) => {
+  const conditions = [];
+  const params = [];
+
+  if (filters.search) {
+    conditions.push(`
+      (
+        nomor_anggota LIKE ?
+        OR nama_anggota LIKE ?
+        OR keterangan LIKE ?
+      )
+    `);
+
+    const keyword = `%${filters.search}%`;
+    params.push(keyword, keyword, keyword);
+  }
+
+  return {
+    whereClause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+};
+
+const getAllMasterAnggota = async (filters = {}) => {
+  const { whereClause, params } = buildMasterAnggotaConditions(filters);
   const [rows] = await db.query(
     `${baseSelectQuery}
-     ORDER BY nama_anggota ASC`
+     ${whereClause}
+     ORDER BY nama_anggota ASC
+     LIMIT ? OFFSET ?`,
+    [...params, filters.limit, filters.offset]
+  );
+  const [countRows] = await db.query(
+    `SELECT COUNT(*) AS total
+     FROM master_anggota
+     ${whereClause}`,
+    params
   );
 
-  return rows;
+  return {
+    rows,
+    pagination: {
+      page: filters.page,
+      limit: filters.limit,
+      total: countRows[0].total,
+      total_pages: Math.ceil(countRows[0].total / filters.limit),
+    },
+  };
 };
 
 const getMasterAnggotaById = async (id) => {

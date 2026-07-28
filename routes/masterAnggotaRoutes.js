@@ -1,8 +1,11 @@
 const express = require('express');
 
 const masterAnggotaController = require('../controllers/masterAnggotaController');
+const { authenticateToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
+
+router.use(authenticateToken);
 
 router.get('/', masterAnggotaController.getAllMasterAnggota);
 router.get('/:id', masterAnggotaController.getMasterAnggotaById);

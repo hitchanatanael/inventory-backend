@@ -2,13 +2,23 @@ const masterAnggotaService = require('../services/masterAnggotaService');
 const response = require('../utils/response');
 const {
   validateMasterAnggotaPayload,
+  validateMasterAnggotaQuery,
 } = require('../validators/masterAnggotaValidator');
 
 const getAllMasterAnggota = async (req, res) => {
   try {
-    const data = await masterAnggotaService.getAllMasterAnggota();
+    const { filters, error } = validateMasterAnggotaQuery(req.query);
 
-    return response.success(res, 'Data master anggota berhasil diambil', data);
+    if (error) {
+      return response.error(res, error, 400);
+    }
+
+    const result = await masterAnggotaService.getAllMasterAnggota(filters);
+
+    return response.success(res, 'Data master anggota berhasil diambil', {
+      anggota: result.rows,
+      pagination: result.pagination,
+    });
   } catch (error) {
     return response.error(res, 'Gagal mengambil data master anggota');
   }
