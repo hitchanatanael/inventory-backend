@@ -15,28 +15,64 @@ const baseSelectQuery = `
   LEFT JOIN lokasi l ON l.id = mb.id_lokasi
 `;
 
-const getAllMasterBarang = async () => {
+const getScopedLocationId = (scope, requestedLocationId) => {
+  if (scope && !scope.isSuperAdmin) {
+    return scope.id_lokasi;
+  }
+
+  return requestedLocationId;
+};
+
+const addScopeCondition = (conditions, params, scope) => {
+  if (scope && !scope.isSuperAdmin) {
+    conditions.push('mb.id_lokasi = ?');
+    params.push(scope.id_lokasi);
+  }
+};
+
+const getAllMasterBarang = async (filters = {}, scope = null) => {
+  const conditions = [];
+  const params = [];
+  const scopedLocationId = getScopedLocationId(scope, filters.id_lokasi);
+
+  if (scopedLocationId !== undefined) {
+    conditions.push('mb.id_lokasi = ?');
+    params.push(scopedLocationId);
+  }
+
+  const whereClause = conditions.length
+    ? `WHERE ${conditions.join(' AND ')}`
+    : '';
+
   const [rows] = await db.query(
     `${baseSelectQuery}
-     ORDER BY mb.id ASC`
+     ${whereClause}
+     ORDER BY mb.id ASC`,
+    params
   );
 
   return rows;
 };
 
-const getMasterBarangById = async (id) => {
+const getMasterBarangById = async (id, scope = null) => {
+  const conditions = ['mb.id = ?'];
+  const params = [id];
+
+  addScopeCondition(conditions, params, scope);
+
   const [rows] = await db.query(
     `${baseSelectQuery}
-     WHERE mb.id = ?
+     WHERE ${conditions.join(' AND ')}
      LIMIT 1`,
-    [id]
+    params
   );
 
   return rows[0] || null;
 };
 
-const createMasterBarang = async (payload) => {
-  const { kode_barang, nama_barang, satuan, id_lokasi, harga_satuan } = payload;
+const createMasterBarang = async (payload, scope = null) => {
+  const { kode_barang, nama_barang, satuan, harga_satuan } = payload;
+  const id_lokasi = getScopedLocationId(scope, payload.id_lokasi);
 
   const [result] = await db.query(
     `INSERT INTO master_barang
@@ -45,17 +81,18 @@ const createMasterBarang = async (payload) => {
     [kode_barang, nama_barang, satuan, id_lokasi, harga_satuan]
   );
 
-  return getMasterBarangById(result.insertId);
+  return getMasterBarangById(result.insertId, scope);
 };
 
-const updateMasterBarang = async (id, payload) => {
-  const existingBarang = await getMasterBarangById(id);
+const updateMasterBarang = async (id, payload, scope = null) => {
+  const existingBarang = await getMasterBarangById(id, scope);
 
   if (!existingBarang) {
     return null;
   }
 
-  const { kode_barang, nama_barang, satuan, id_lokasi, harga_satuan } = payload;
+  const { kode_barang, nama_barang, satuan, harga_satuan } = payload;
+  const id_lokasi = getScopedLocationId(scope, payload.id_lokasi);
 
   await db.query(
     `UPDATE master_barang
@@ -70,13 +107,21 @@ const updateMasterBarang = async (id, payload) => {
     [kode_barang, nama_barang, satuan, id_lokasi, harga_satuan, id]
   );
 
-  return getMasterBarangById(id);
+  return getMasterBarangById(id, scope);
 };
 
-const deleteMasterBarang = async (id) => {
+const deleteMasterBarang = async (id, scope = null) => {
+  const conditions = ['id = ?'];
+  const params = [id];
+
+  if (scope && !scope.isSuperAdmin) {
+    conditions.push('id_lokasi = ?');
+    params.push(scope.id_lokasi);
+  }
+
   const [result] = await db.query(
-    'DELETE FROM master_barang WHERE id = ?',
-    [id]
+    `DELETE FROM master_barang WHERE ${conditions.join(' AND ')}`,
+    params
   );
 
   return result.affectedRows > 0;

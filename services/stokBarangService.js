@@ -17,14 +17,23 @@ const baseSelectQuery = `
   FROM v_stok_barang
 `;
 
-const getAllStokBarang = async (filters = {}) => {
+const getScopedLocationId = (scope, requestedLocationId) => {
+  if (scope && !scope.isSuperAdmin) {
+    return scope.id_lokasi;
+  }
+
+  return requestedLocationId;
+};
+
+const getAllStokBarang = async (filters = {}, scope = null) => {
   const { id_lokasi, search, hanya_tersedia } = filters;
   const conditions = [];
   const values = [];
+  const scopedLocationId = getScopedLocationId(scope, id_lokasi);
 
-  if (id_lokasi !== undefined) {
+  if (scopedLocationId !== undefined) {
     conditions.push('id_lokasi = ?');
-    values.push(id_lokasi);
+    values.push(scopedLocationId);
   }
 
   if (search) {
@@ -64,14 +73,27 @@ const getAllStokBarang = async (filters = {}) => {
   return rows;
 };
 
-const getRingkasanStokBarang = async () => {
+const getRingkasanStokBarang = async (scope = null) => {
+  const conditions = [];
+  const values = [];
+
+  if (scope && !scope.isSuperAdmin) {
+    conditions.push('id_lokasi = ?');
+    values.push(scope.id_lokasi);
+  }
+
+  const whereClause = conditions.length
+    ? `WHERE ${conditions.join(' AND ')}`
+    : '';
+
   const [keseluruhanRows] = await db.query(`
     SELECT
       COUNT(*) AS total_jenis_barang,
       COALESCE(SUM(stok), 0) AS total_stok,
       COALESCE(SUM(nilai_aset), 0) AS total_nilai_aset
     FROM v_stok_barang
-  `);
+    ${whereClause}
+  `, values);
 
   const [perLokasiRows] = await db.query(`
     SELECT
@@ -82,12 +104,13 @@ const getRingkasanStokBarang = async () => {
       COALESCE(SUM(stok), 0) AS total_stok,
       COALESCE(SUM(nilai_aset), 0) AS total_nilai_aset
     FROM v_stok_barang
+    ${whereClause}
     GROUP BY
       id_lokasi,
       kode_lokasi,
       nama_lokasi
     ORDER BY nama_lokasi ASC
-  `);
+  `, values);
 
   return {
     keseluruhan: keseluruhanRows[0],

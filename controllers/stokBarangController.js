@@ -6,13 +6,22 @@ const {
 
 const getAllStokBarang = async (req, res) => {
   try {
-    const { filters, error } = validateStokBarangQuery(req.query);
+    const query = req.locationScope && !req.locationScope.isSuperAdmin
+      ? {
+          ...req.query,
+          id_lokasi: undefined,
+        }
+      : req.query;
+    const { filters, error } = validateStokBarangQuery(query);
 
     if (error) {
       return response.error(res, error, 400);
     }
 
-    const data = await stokBarangService.getAllStokBarang(filters);
+    const data = await stokBarangService.getAllStokBarang(
+      filters,
+      req.locationScope
+    );
 
     return response.success(res, 'Data stok barang berhasil diambil', data);
   } catch (error) {
@@ -22,7 +31,9 @@ const getAllStokBarang = async (req, res) => {
 
 const getRingkasanStokBarang = async (req, res) => {
   try {
-    const data = await stokBarangService.getRingkasanStokBarang();
+    const data = await stokBarangService.getRingkasanStokBarang(
+      req.locationScope
+    );
 
     return response.success(res, 'Ringkasan stok barang berhasil diambil', data);
   } catch (error) {
