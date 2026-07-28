@@ -1,113 +1,113 @@
-const bcrypt = require('bcryptjs');
-require('dotenv').config();
+require("dotenv").config();
 
-const db = require('../config/db');
-const authService = require('../services/authService');
-const { ROLE_SUPER_ADMIN } = require('../constants/roles');
+const bcrypt = require("bcryptjs");
+const db = require("../config/db");
 
-const parseArgs = (args) => {
-  return args.reduce((parsedArgs, arg) => {
-    if (!arg.startsWith('--')) {
-      return parsedArgs;
-    }
-
-    const separatorIndex = arg.indexOf('=');
-
-    if (separatorIndex === -1) {
-      parsedArgs[arg.slice(2)] = '';
-      return parsedArgs;
-    }
-
-    const key = arg.slice(2, separatorIndex);
-    const value = arg.slice(separatorIndex + 1);
-
-    parsedArgs[key] = value;
-    return parsedArgs;
-  }, {});
+const SUPER_ADMIN = {
+    nama: "Super Admin",
+    username: "admin",
+    password: "Admin123!",
 };
 
-const isEmpty = (value) => value === undefined || value === null || value === '';
+async function createSuperAdmin() {
+    let connection;
 
-const validatePayload = (payload) => {
-  if (isEmpty(payload.nama)) {
-    return 'Nama wajib diisi';
-  }
+    try {
+        const saltRounds = Number(process.env.BCRYPT_SALT_ROUNDS || 10);
 
-  if (isEmpty(payload.username)) {
-    return 'Username wajib diisi';
-  }
+        if (!Number.isInteger(saltRounds) || saltRounds < 4) {
+            throw new Error("BCRYPT_SALT_ROUNDS tidak valid.");
+        }
 
-  if (isEmpty(payload.password)) {
-    return 'Password wajib diisi';
-  }
+        connection = await db.getConnection();
 
-  if (String(payload.password).length < 8) {
-    return 'Password minimal 8 karakter';
-  }
+        const [roles] = await connection.execute(
+            `
+        SELECT id
+        FROM roles
+        WHERE nama_role = ?
+        LIMIT 1
+      `,
+            ["SUPER ADMIN"],
+        );
 
-  return null;
-};
+        if (roles.length === 0) {
+            throw new Error(
+                'Role "SUPER ADMIN" tidak ditemukan. Pastikan tabel roles sudah memiliki role tersebut.',
+            );
+        }
 
-const main = async () => {
-  try {
-    const args = parseArgs(process.argv.slice(2));
-    const payload = {
-      nama: isEmpty(args.nama) ? args.nama : String(args.nama).trim(),
-      username: isEmpty(args.username) ? args.username : String(args.username).trim(),
-      password: args.password,
-    };
-    const validationMessage = validatePayload(payload);
+        const idRoleSuperAdmin = roles[0].id;
 
-    if (validationMessage) {
-      console.error(validationMessage);
-      process.exitCode = 1;
-      return;
+        const [existingUsers] = await connection.execute(
+            `
+        SELECT id, username
+        FROM users
+        WHERE username = ?
+        LIMIT 1
+      `,
+            [SUPER_ADMIN.username],
+        );
+
+        if (existingUsers.length > 0) {
+            console.log("==========================================");
+            console.log("Super Admin sudah tersedia.");
+            console.log(`Username : ${SUPER_ADMIN.username}`);
+            console.log("Tidak ada data yang diubah.");
+            console.log("==========================================");
+            return;
+        }
+
+        const passwordHash = await bcrypt.hash(
+            SUPER_ADMIN.password,
+            saltRounds,
+        );
+
+        await connection.execute(
+            `
+        INSERT INTO users (
+          id_role,
+          id_lokasi,
+          nama,
+          username,
+          password_hash,
+          is_active
+        )
+        VALUES (?, NULL, ?, ?, ?, 1)
+      `,
+            [
+                idRoleSuperAdmin,
+                SUPER_ADMIN.nama,
+                SUPER_ADMIN.username,
+                passwordHash,
+            ],
+        );
+
+        console.log("==========================================");
+        console.log("Super Admin berhasil dibuat.");
+        console.log("");
+        console.log(`Nama     : ${SUPER_ADMIN.nama}`);
+        console.log(`Username : ${SUPER_ADMIN.username}`);
+        console.log(`Password : ${SUPER_ADMIN.password}`);
+        console.log("");
+        console.log("Segera ganti password untuk production.");
+        console.log("==========================================");
+    } catch (error) {
+        console.error("==========================================");
+        console.error("Gagal membuat Super Admin.");
+        console.error(error.message);
+        console.error("==========================================");
+
+        process.exitCode = 1;
+    } finally {
+        if (connection) {
+            connection.release();
+        }
+
+        if (typeof db.end === "function") {
+            await db.end();
+        }
     }
+}
 
-    const role = await authService.findRoleByName(ROLE_SUPER_ADMIN);
-
-    if (!role) {
-      console.error('Role SUPER ADMIN tidak ditemukan');
-      process.exitCode = 1;
-      return;
-    }
-
-    const roleValidation = authService.validateUserRoleLocation({
-      nama_role: role.nama_role,
-      id_lokasi: null,
-    });
-
-    if (!roleValidation.isValid) {
-      console.error(roleValidation.message);
-      process.exitCode = 1;
-      return;
-    }
-
-    const existingUser = await authService.findUserByUsername(payload.username);
-
-    if (existingUser) {
-      console.error('Username sudah digunakan');
-      process.exitCode = 1;
-      return;
-    }
-
-    const saltRounds = Number(process.env.BCRYPT_SALT_ROUNDS) || 10;
-    const passwordHash = await bcrypt.hash(payload.password, saltRounds);
-
-    await authService.createSuperAdmin({
-      id_role: role.id,
-      nama: payload.nama,
-      username: payload.username,
-      password_hash: passwordHash,
-    });
-
-    console.log('Super Admin berhasil dibuat');
-  } catch (error) {
-    console.error('Gagal membuat Super Admin');
-    process.exitCode = 1;
-  } finally {
-    await db.end().catch(() => {});
-  }
-};
-
-main();
+createSuperAdmin();

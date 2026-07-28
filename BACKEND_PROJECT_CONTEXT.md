@@ -1,6 +1,6 @@
 # Backend Project Context
 
-This document describes the current backend state of the `inventory-backend` project as implemented in the repository. It is documentation only. It does not propose source changes as current behavior, and it does not implement authentication, authorization, location scoping, reports, export, audit logs, backup, or restore.
+This document describes the current backend state of the `inventory-backend` project as implemented in the repository. It is documentation only. It does not propose source changes as current behavior, and it does not implement reports, export, audit logs, backup, restore, or frontend behavior.
 
 All facts below are inferred from the current backend source files, `package.json`, `.env.example`, and repository structure. The repository does not contain database migrations, a schema dump, seed files, automated tests, or a SQL definition for `v_stok_barang`; table constraints and view internals are therefore documented only where they can be proven or reasonably inferred from SQL queries.
 
@@ -58,8 +58,9 @@ Authentication-related state:
 
 ```text
 Authentication core is implemented.
-Existing inventory routes are not yet protected.
-Location scoping is prepared but not yet applied to inventory modules.
+Existing inventory routes are authenticated.
+Location scoping is applied to location-owned inventory modules.
+SUPER ADMIN user management is implemented under `/api/users`.
 ```
 
 ## 2. Folder Structure
@@ -88,7 +89,8 @@ inventory-backend/
 |   |-- lokasiController.js
 |   |-- masterAnggotaController.js
 |   |-- masterBarangController.js
-|   `-- stokBarangController.js
+|   |-- stokBarangController.js
+|   `-- userController.js
 |-- middleware/
 |   |-- .gitkeep
 |   `-- authMiddleware.js
@@ -100,7 +102,8 @@ inventory-backend/
 |   |-- lokasiRoutes.js
 |   |-- masterAnggotaRoutes.js
 |   |-- masterBarangRoutes.js
-|   `-- stokBarangRoutes.js
+|   |-- stokBarangRoutes.js
+|   `-- userRoutes.js
 |-- sql/
 |   `-- alter_barang_keluar_status_to_cash_loan.sql
 |-- scripts/
@@ -112,7 +115,8 @@ inventory-backend/
 |   |-- lokasiService.js
 |   |-- masterAnggotaService.js
 |   |-- masterBarangService.js
-|   `-- stokBarangService.js
+|   |-- stokBarangService.js
+|   `-- userService.js
 |-- utils/
 |   `-- response.js
 `-- validators/
@@ -122,7 +126,8 @@ inventory-backend/
     |-- lokasiValidator.js
     |-- masterAnggotaValidator.js
     |-- masterBarangValidator.js
-    `-- stokBarangValidator.js
+    |-- stokBarangValidator.js
+    `-- userValidator.js
 ```
 
 Folder and file responsibilities:
@@ -193,6 +198,7 @@ Mounted route prefixes:
 | --- | --- |
 | `/api/examples` | `routes/exampleRoutes.js` |
 | `/api/auth` | `routes/authRoutes.js` |
+| `/api/users` | `routes/userRoutes.js` |
 | `/api/master-barang` | `routes/masterBarangRoutes.js` |
 | `/api/master-anggota` | `routes/masterAnggotaRoutes.js` |
 | `/api/lokasi` | `routes/lokasiRoutes.js` |
@@ -272,7 +278,7 @@ Environment variables listed in `.env.example` and/or consumed by source:
 | `DB_PORT` | No | `3306` | `config/db.js` | MySQL port. Source uses `Number(process.env.DB_PORT) || 3306`. |
 | `JWT_SECRET` | Yes for auth | None | `controllers/authController.js`, `middleware/authMiddleware.js` | Secret used to sign and verify JWTs. Must not be logged or exposed. |
 | `JWT_EXPIRES_IN` | No | `8h` | `controllers/authController.js` | JWT expiration passed to `jsonwebtoken`. |
-| `BCRYPT_SALT_ROUNDS` | No | `10` | `scripts/createSuperAdmin.js` | Salt rounds used when hashing the initial Super Admin password. |
+| `BCRYPT_SALT_ROUNDS` | No | `10` | `scripts/createSuperAdmin.js`, `controllers/userController.js` | Salt rounds used when hashing Super Admin-created user passwords and the initial Super Admin password. |
 
 `.env.example` contains:
 
@@ -971,12 +977,13 @@ Route inventory by module:
 
 The Authentication module implements Phase 1 backend authentication using the existing `users`, `roles`, and `lokasi` tables. It provides login, JWT creation, an authenticated current-user endpoint, role middleware foundation, location-scope middleware foundation, and a CLI script for creating the first Super Admin.
 
-Current Phase 1 boundary:
+Current authentication and inventory-scope boundary:
 
 ```text
 Authentication core is implemented.
-Existing inventory routes are not yet protected.
-Location scoping is prepared but not yet applied to inventory modules.
+Inventory routes are authenticated.
+Location scoping is applied to location-owned inventory modules.
+Role authorization is applied only to location master-data management routes.
 ```
 
 #### Files
@@ -1179,7 +1186,7 @@ HTTP 403
 Anda tidak memiliki akses ke fitur ini
 ```
 
-This middleware is not yet applied to inventory routes.
+This middleware is applied to `POST`, `PUT`, and `DELETE` routes in the Lokasi module for `ROLE_SUPER_ADMIN`.
 
 #### Location Scope Foundation
 
@@ -1203,7 +1210,7 @@ req.locationScope = {
 };
 ```
 
-It does not read `id_lokasi` from `req.body`, `req.query`, or `req.params`. This middleware is not yet applied to inventory routes.
+It does not read `id_lokasi` from `req.body`, `req.query`, or `req.params`. This middleware is applied to location-owned inventory route modules.
 
 #### Super Admin Creation Script
 
@@ -1237,10 +1244,163 @@ Behavior:
 - No public registration endpoint.
 - No refresh token.
 - No logout/token blacklist.
-- No password reset.
-- No user CRUD.
-- Existing inventory routes remain public in Phase 1.
-- Location scoping is prepared but not applied to inventory modules.
+- No self-service password reset.
+
+### User Management Phase 2C
+
+Phase 2C implements SUPER ADMIN-only user management under:
+
+```text
+/api/users
+```
+
+Route protection:
+
+```text
+authenticateToken
+requireRole(ROLE_SUPER_ADMIN)
+```
+
+ADMIN users are rejected by `requireRole` with:
+
+```text
+HTTP 403
+Anda tidak memiliki akses ke fitur ini
+```
+
+Runtime files:
+
+| Layer | File |
+| --- | --- |
+| Route | `routes/userRoutes.js` |
+| Controller | `controllers/userController.js` |
+| Validator | `validators/userValidator.js` |
+| Service | `services/userService.js` |
+
+Implemented endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/users` | List users with `page`, `limit`, `search`, `id_role`, `id_lokasi`, and `is_active` filters. |
+| `GET` | `/api/users/:id` | Read one user by ID. |
+| `POST` | `/api/users` | Create a user. |
+| `PUT` | `/api/users/:id` | Update user profile, role, location, username, and active status. |
+| `PATCH` | `/api/users/:id/status` | Activate or deactivate a user. |
+| `PATCH` | `/api/users/:id/password` | Replace a user's password hash. |
+| `DELETE` | `/api/users/:id` | Hard delete a user. |
+
+Safe user response fields:
+
+```text
+id
+nama
+username
+id_role
+nama_role
+id_lokasi
+nama_lokasi
+is_active
+created_at
+updated_at
+```
+
+`password_hash` is never selected in user-management responses.
+
+User-management role-location rules:
+
+| Role | Rule |
+| --- | --- |
+| `SUPER ADMIN` | Must have `id_lokasi = NULL`; create/update rejects submitted location values. |
+| `ADMIN` | Must have a valid `id_lokasi` that exists in the `lokasi` table. |
+
+Username and password behavior:
+
+- Duplicate usernames return `409` with `Username sudah digunakan`.
+- Passwords are hashed with `bcryptjs`.
+- Salt rounds use `BCRYPT_SALT_ROUNDS`, defaulting to `10`.
+- Password changes return `Password pengguna berhasil diubah`.
+
+Self-protection:
+
+| Action | Behavior |
+| --- | --- |
+| Deactivate current user | Rejected with `Akun yang sedang digunakan tidak dapat dinonaktifkan`. |
+| Delete current user | Rejected with `Akun yang sedang digunakan tidak dapat dihapus`. |
+| Change current SUPER ADMIN role away from SUPER ADMIN | Rejected with `Akun yang sedang digunakan tidak dapat mengubah role sendiri`. |
+
+Authentication behavior is unchanged:
+
+- Login and JWT payload are not modified by this phase.
+- `GET /api/auth/me` behavior is not modified by this phase.
+- Inactive users are still rejected by existing auth middleware/login behavior with `Akun tidak aktif`.
+- No SQL schema changes are introduced.
+- No frontend changes are introduced.
+
+### Location-Based Authorization Phase 2B
+
+Phase 2B applies location scope to existing inventory modules after authentication.
+
+Current state:
+
+```text
+Inventory routes are authenticated.
+Location scoping is applied to location-owned inventory modules.
+Authorization by role is applied only for location master-data management.
+```
+
+Scoped modules:
+
+| Module | Scope Behavior |
+| --- | --- |
+| Lokasi | ADMIN can list/read only assigned location; only SUPER ADMIN can create/update/delete locations. |
+| Master Barang | Scoped by `master_barang.id_lokasi`. |
+| Barang Masuk | Scoped by `barang_masuk.id_lokasi`. |
+| Barang Keluar | Scoped by `barang_keluar.id_lokasi`, including stock validation location for ADMIN writes. |
+| Stok Barang | Scoped by `v_stok_barang.id_lokasi`; ADMIN summaries only include assigned location. |
+
+Global module:
+
+| Module | Reason |
+| --- | --- |
+| Master Anggota | Current table does not contain `id_lokasi`; SUPER ADMIN and ADMIN currently access it globally. |
+
+SUPER ADMIN behavior:
+
+- May read all scoped data by default.
+- May optionally filter supported list endpoints with `id_lokasi`.
+- May create/update/delete data for any valid location.
+- May manage `lokasi`.
+- Receives all-location stock summary.
+
+ADMIN behavior:
+
+- May read only assigned-location data.
+- Create/update payload `id_lokasi` is forced to `req.locationScope.id_lokasi`.
+- Client-provided `id_lokasi` in body/query cannot override authenticated location.
+- Cross-location details/updates/deletes return the module's normal `404` not-found response.
+- Cannot create, update, or delete location master data.
+
+Client-provided location handling:
+
+```text
+For ADMIN, body/query id_lokasi is ignored for authorization and persistence.
+For SUPER ADMIN, body/query id_lokasi remains available where validators already support it.
+```
+
+Location management restriction:
+
+```text
+POST /api/lokasi
+PUT /api/lokasi/:id
+DELETE /api/lokasi/:id
+```
+
+These routes use `requireRole(ROLE_SUPER_ADMIN)`.
+
+Stock summary scoping:
+
+- SUPER ADMIN receives overall totals and per-location totals for all locations.
+- ADMIN receives `keseluruhan` calculated only from the assigned location and `per_lokasi` containing only that location.
 
 ### Example Module
 
@@ -2585,7 +2745,7 @@ Usage:
 | Barang Keluar | Create/update payload accepts `id_lokasi`; list filter uses `id_lokasi`; stock validation uses `id_lokasi`. |
 | Stok Barang | List filter uses `id_lokasi`; summary groups by location fields from view. |
 
-Location is currently selected or submitted manually by the client in inventory modules. Authentication middleware exists, but it is not yet applied to inventory routes, so no authorization layer currently restricts which location can be submitted there.
+Location is currently selected or submitted manually by SUPER ADMIN for inventory modules. For ADMIN users, controllers/services force the authenticated `req.locationScope.id_lokasi` and ignore client-provided location values.
 
 ## 14. Barang Masuk Module Details
 
@@ -3063,7 +3223,9 @@ Implemented auth surfaces:
 Authorization:
 
 ```text
-Authorization middleware foundation is implemented, but not yet applied to inventory routes.
+Authorization middleware foundation is implemented.
+Location master-data write routes require SUPER ADMIN.
+Other inventory modules currently use location scope, not role restrictions.
 ```
 
 Passwords:
@@ -3100,9 +3262,10 @@ Protected routes:
 
 ```text
 GET /api/auth/me is protected.
+Inventory API routes are protected.
 ```
 
-Existing inventory routes are not yet protected in Phase 1.
+Existing inventory routes require a valid JWT.
 
 Role checks:
 
@@ -3113,10 +3276,10 @@ requireRole(...allowedRoles) is implemented for future use.
 Location checks:
 
 ```text
-attachLocationScope is implemented for future use.
+attachLocationScope is implemented and applied to location-owned inventory modules.
 ```
 
-Inventory modules still accept `id_lokasi` from request payloads or query parameters because Phase 1 does not apply location scoping to inventory routes.
+For ADMIN users, inventory modules ignore client-provided `id_lokasi` and use `req.locationScope.id_lokasi`.
 
 CORS:
 
@@ -3171,7 +3334,8 @@ Current implementation status:
 req.user is implemented by authenticateToken for protected auth routes.
 Role middleware foundation is implemented.
 Location-scope middleware foundation is implemented.
-Inventory routes are not yet protected or location-scoped.
+Inventory routes are authenticated.
+Location-owned inventory routes are location-scoped.
 ```
 
 Tables/views containing or exposing `id_lokasi`:
@@ -3289,11 +3453,6 @@ Future location admin behavior:
 ### Planned But Not Implemented
 
 ```text
-Authentication
-Authorization
-User accounts
-User roles
-Location-based access control
 Audit logs
 Reports
 Excel export
@@ -3318,13 +3477,13 @@ Dashboard
 Authentication:
 
 ```text
-Not implemented for every endpoint.
+Inventory endpoints require authenticateToken.
 ```
 
 Location scoped:
 
 ```text
-Not implemented for every endpoint.
+Applied to location-owned modules. Master Anggota remains global because it has no id_lokasi field.
 ```
 
 | Method | Complete URL | Module | Controller | Authentication | Location Scoped | Purpose |
@@ -3333,33 +3492,40 @@ Not implemented for every endpoint.
 | `GET` | `http://localhost:5000/api/examples` | Example | `getExamples` | Not implemented | Not implemented | Example DB query. |
 | `POST` | `http://localhost:5000/api/auth/login` | Authentication | `login` | Not required | Not implemented | Validate credentials and return JWT plus safe user data. |
 | `GET` | `http://localhost:5000/api/auth/me` | Authentication | `getCurrentUser` | `authenticateToken` | Prepared but not applied as inventory scope | Return safe current user data from the database. |
-| `GET` | `http://localhost:5000/api/master-anggota` | Master Anggota | `getAllMasterAnggota` | Not implemented | Not implemented | List members. |
-| `GET` | `http://localhost:5000/api/master-anggota/:id` | Master Anggota | `getMasterAnggotaById` | Not implemented | Not implemented | Member detail. |
-| `POST` | `http://localhost:5000/api/master-anggota` | Master Anggota | `createMasterAnggota` | Not implemented | Not implemented | Create member. |
-| `PUT` | `http://localhost:5000/api/master-anggota/:id` | Master Anggota | `updateMasterAnggota` | Not implemented | Not implemented | Update member. |
-| `DELETE` | `http://localhost:5000/api/master-anggota/:id` | Master Anggota | `deleteMasterAnggota` | Not implemented | Not implemented | Hard delete member. |
-| `GET` | `http://localhost:5000/api/master-barang` | Master Barang | `getAllMasterBarang` | Not implemented | Not implemented | List goods. |
-| `GET` | `http://localhost:5000/api/master-barang/:id` | Master Barang | `getMasterBarangById` | Not implemented | Not implemented | Goods detail. |
-| `POST` | `http://localhost:5000/api/master-barang` | Master Barang | `createMasterBarang` | Not implemented | Not implemented | Create goods. |
-| `PUT` | `http://localhost:5000/api/master-barang/:id` | Master Barang | `updateMasterBarang` | Not implemented | Not implemented | Update goods. |
-| `DELETE` | `http://localhost:5000/api/master-barang/:id` | Master Barang | `deleteMasterBarang` | Not implemented | Not implemented | Hard delete goods. |
-| `GET` | `http://localhost:5000/api/lokasi` | Lokasi | `getAllLokasi` | Not implemented | Not implemented | List locations. |
-| `GET` | `http://localhost:5000/api/lokasi/:id` | Lokasi | `getLokasiById` | Not implemented | Not implemented | Location detail. |
-| `POST` | `http://localhost:5000/api/lokasi` | Lokasi | `createLokasi` | Not implemented | Not implemented | Create location. |
-| `PUT` | `http://localhost:5000/api/lokasi/:id` | Lokasi | `updateLokasi` | Not implemented | Not implemented | Update location. |
-| `DELETE` | `http://localhost:5000/api/lokasi/:id` | Lokasi | `deleteLokasi` | Not implemented | Not implemented | Hard delete location. |
-| `GET` | `http://localhost:5000/api/barang-masuk` | Barang Masuk | `getAllBarangMasuk` | Not implemented | Not implemented | List incoming transactions. |
-| `GET` | `http://localhost:5000/api/barang-masuk/:id` | Barang Masuk | `getBarangMasukById` | Not implemented | Not implemented | Incoming detail. |
-| `POST` | `http://localhost:5000/api/barang-masuk` | Barang Masuk | `createBarangMasuk` | Not implemented | Not implemented | Create incoming transaction. |
-| `PUT` | `http://localhost:5000/api/barang-masuk/:id` | Barang Masuk | `updateBarangMasuk` | Not implemented | Not implemented | Update incoming transaction. |
-| `DELETE` | `http://localhost:5000/api/barang-masuk/:id` | Barang Masuk | `deleteBarangMasuk` | Not implemented | Not implemented | Hard delete incoming transaction. |
-| `GET` | `http://localhost:5000/api/barang-keluar` | Barang Keluar | `getAllBarangKeluar` | Not implemented | Not implemented | List outgoing transactions. |
-| `GET` | `http://localhost:5000/api/barang-keluar/:id` | Barang Keluar | `getBarangKeluarById` | Not implemented | Not implemented | Outgoing detail. |
-| `POST` | `http://localhost:5000/api/barang-keluar` | Barang Keluar | `createBarangKeluar` | Not implemented | Not implemented | Create outgoing transaction with stock validation. |
-| `PUT` | `http://localhost:5000/api/barang-keluar/:id` | Barang Keluar | `updateBarangKeluar` | Not implemented | Not implemented | Update outgoing transaction with effective stock validation. |
-| `DELETE` | `http://localhost:5000/api/barang-keluar/:id` | Barang Keluar | `deleteBarangKeluar` | Not implemented | Not implemented | Hard delete outgoing transaction. |
-| `GET` | `http://localhost:5000/api/stok-barang` | Stok Barang | `getAllStokBarang` | Not implemented | Not implemented | List stock view rows. |
-| `GET` | `http://localhost:5000/api/stok-barang/ringkasan` | Stok Barang | `getRingkasanStokBarang` | Not implemented | Not implemented | Stock summary overall and per location. |
+| `GET` | `http://localhost:5000/api/users` | User Management | `getAllUsers` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Not implemented | List users with pagination and filters. |
+| `GET` | `http://localhost:5000/api/users/:id` | User Management | `getUserById` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Not implemented | User detail without password hash. |
+| `POST` | `http://localhost:5000/api/users` | User Management | `createUser` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Not implemented | Create user with role-location validation and bcrypt password hashing. |
+| `PUT` | `http://localhost:5000/api/users/:id` | User Management | `updateUser` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Not implemented | Update user profile, role, location, username, and active status. |
+| `PATCH` | `http://localhost:5000/api/users/:id/status` | User Management | `updateUserStatus` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Not implemented | Activate or deactivate a user. |
+| `PATCH` | `http://localhost:5000/api/users/:id/password` | User Management | `updateUserPassword` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Not implemented | Replace a user's password hash. |
+| `DELETE` | `http://localhost:5000/api/users/:id` | User Management | `deleteUser` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Not implemented | Hard delete a user, except the current account. |
+| `GET` | `http://localhost:5000/api/master-anggota` | Master Anggota | `getAllMasterAnggota` | `authenticateToken` | Global | List members. |
+| `GET` | `http://localhost:5000/api/master-anggota/:id` | Master Anggota | `getMasterAnggotaById` | `authenticateToken` | Global | Member detail. |
+| `POST` | `http://localhost:5000/api/master-anggota` | Master Anggota | `createMasterAnggota` | `authenticateToken` | Global | Create member. |
+| `PUT` | `http://localhost:5000/api/master-anggota/:id` | Master Anggota | `updateMasterAnggota` | `authenticateToken` | Global | Update member. |
+| `DELETE` | `http://localhost:5000/api/master-anggota/:id` | Master Anggota | `deleteMasterAnggota` | `authenticateToken` | Global | Hard delete member. |
+| `GET` | `http://localhost:5000/api/master-barang` | Master Barang | `getAllMasterBarang` | `authenticateToken` | Yes | List goods. |
+| `GET` | `http://localhost:5000/api/master-barang/:id` | Master Barang | `getMasterBarangById` | `authenticateToken` | Yes | Goods detail. |
+| `POST` | `http://localhost:5000/api/master-barang` | Master Barang | `createMasterBarang` | `authenticateToken` | Yes | Create goods. |
+| `PUT` | `http://localhost:5000/api/master-barang/:id` | Master Barang | `updateMasterBarang` | `authenticateToken` | Yes | Update goods. |
+| `DELETE` | `http://localhost:5000/api/master-barang/:id` | Master Barang | `deleteMasterBarang` | `authenticateToken` | Yes | Hard delete goods. |
+| `GET` | `http://localhost:5000/api/lokasi` | Lokasi | `getAllLokasi` | `authenticateToken` | Yes | List locations. |
+| `GET` | `http://localhost:5000/api/lokasi/:id` | Lokasi | `getLokasiById` | `authenticateToken` | Yes | Location detail. |
+| `POST` | `http://localhost:5000/api/lokasi` | Lokasi | `createLokasi` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Role restricted | Create location. |
+| `PUT` | `http://localhost:5000/api/lokasi/:id` | Lokasi | `updateLokasi` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Role restricted | Update location. |
+| `DELETE` | `http://localhost:5000/api/lokasi/:id` | Lokasi | `deleteLokasi` | `authenticateToken`, `requireRole(ROLE_SUPER_ADMIN)` | Role restricted | Hard delete location. |
+| `GET` | `http://localhost:5000/api/barang-masuk` | Barang Masuk | `getAllBarangMasuk` | `authenticateToken` | Yes | List incoming transactions. |
+| `GET` | `http://localhost:5000/api/barang-masuk/:id` | Barang Masuk | `getBarangMasukById` | `authenticateToken` | Yes | Incoming detail. |
+| `POST` | `http://localhost:5000/api/barang-masuk` | Barang Masuk | `createBarangMasuk` | `authenticateToken` | Yes | Create incoming transaction. |
+| `PUT` | `http://localhost:5000/api/barang-masuk/:id` | Barang Masuk | `updateBarangMasuk` | `authenticateToken` | Yes | Update incoming transaction. |
+| `DELETE` | `http://localhost:5000/api/barang-masuk/:id` | Barang Masuk | `deleteBarangMasuk` | `authenticateToken` | Yes | Hard delete incoming transaction. |
+| `GET` | `http://localhost:5000/api/barang-keluar` | Barang Keluar | `getAllBarangKeluar` | `authenticateToken` | Yes | List outgoing transactions. |
+| `GET` | `http://localhost:5000/api/barang-keluar/:id` | Barang Keluar | `getBarangKeluarById` | `authenticateToken` | Yes | Outgoing detail. |
+| `POST` | `http://localhost:5000/api/barang-keluar` | Barang Keluar | `createBarangKeluar` | `authenticateToken` | Yes | Create outgoing transaction with stock validation. |
+| `PUT` | `http://localhost:5000/api/barang-keluar/:id` | Barang Keluar | `updateBarangKeluar` | `authenticateToken` | Yes | Update outgoing transaction with effective stock validation. |
+| `DELETE` | `http://localhost:5000/api/barang-keluar/:id` | Barang Keluar | `deleteBarangKeluar` | `authenticateToken` | Yes | Hard delete outgoing transaction. |
+| `GET` | `http://localhost:5000/api/stok-barang` | Stok Barang | `getAllStokBarang` | `authenticateToken` | Yes | List stock view rows. |
+| `GET` | `http://localhost:5000/api/stok-barang/ringkasan` | Stok Barang | `getRingkasanStokBarang` | `authenticateToken` | Yes | Stock summary overall and per location. |
 
 ## 25. Data Flow Examples
 
@@ -3485,11 +3651,9 @@ Proven limitations:
 
 | Limitation | Evidence |
 | --- | --- |
-| Inventory routes are not authenticated | Phase 1 only protects `/api/auth/me`; existing inventory modules remain public. |
-| Inventory routes are not authorized | `requireRole` exists but is not applied to inventory route modules. |
-| Inventory routes are not location-scoped | `attachLocationScope` exists but is not applied to inventory route modules. |
-| No user CRUD or public registration | Only login/current-user and initial Super Admin script are implemented. |
-| Location trusted from client in inventory modules | `id_lokasi` is still accepted in inventory body/query payloads because Phase 2 scoping is not applied. |
+| No general role-based authorization on transaction/master item modules | Phase 2B only restricts location management writes to SUPER ADMIN; other scoped modules rely on location scope. |
+| No public registration or self-service user flows | User CRUD is SUPER ADMIN-only; there is no public registration, logout, refresh token, or self-service password reset flow. |
+| Master Anggota remains global | `master_anggota` has no `id_lokasi`, so no location scope is applied in Phase 2B. |
 | No audit log | No audit table/service/middleware. |
 | No database transaction around stock-sensitive writes | No transaction API usage. |
 | Race condition between stock check and insert/update | `validateAvailableStock` and write are separate queries. |
