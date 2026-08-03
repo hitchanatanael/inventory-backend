@@ -24,6 +24,12 @@ const baseSelectQuery = `
     bk.status,
     bk.created_at,
     bk.updated_at,
+    bk.created_by AS created_by_id,
+    creator.nama AS created_by_nama,
+    creator.username AS created_by_username,
+    bk.updated_by AS updated_by_id,
+    updater.nama AS updated_by_nama,
+    updater.username AS updated_by_username,
     ma.nomor_anggota,
     ma.nama_anggota,
     ma.keterangan,
@@ -35,6 +41,8 @@ const baseSelectQuery = `
   LEFT JOIN master_anggota ma ON ma.id = bk.id_master_anggota
   JOIN master_barang mb ON mb.id = bk.id_master_barang
   JOIN lokasi l ON l.id = bk.id_lokasi
+  LEFT JOIN users creator ON creator.id = bk.created_by
+  LEFT JOIN users updater ON updater.id = bk.updated_by
 `;
 
 const normalizeMasterAnggotaId = (idMasterAnggota) => {
@@ -232,7 +240,7 @@ const getBarangKeluarById = async (id, scope = null) => {
   return rows[0] || null;
 };
 
-const createBarangKeluar = async (payload, scope = null) => {
+const createBarangKeluar = async (payload, scope = null, authenticatedUserId) => {
   const {
     tanggal,
     id_master_barang,
@@ -270,9 +278,11 @@ const createBarangKeluar = async (payload, scope = null) => {
         sisa_bayar,
         harga_modal,
         margin,
-        status
+        status,
+        created_by,
+        updated_by
       )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       tanggal,
       idMasterAnggota,
@@ -286,13 +296,15 @@ const createBarangKeluar = async (payload, scope = null) => {
       calculation.hargaModal,
       calculation.margin,
       status,
+      authenticatedUserId,
+      authenticatedUserId,
     ]
   );
 
   return getBarangKeluarById(result.insertId, scope);
 };
 
-const updateBarangKeluar = async (id, payload, scope = null) => {
+const updateBarangKeluar = async (id, payload, scope = null, authenticatedUserId) => {
   const existingBarangKeluar = await getBarangKeluarById(id, scope);
 
   if (!existingBarangKeluar) {
@@ -349,6 +361,7 @@ const updateBarangKeluar = async (id, payload, scope = null) => {
       harga_modal = ?,
       margin = ?,
       status = ?,
+      updated_by = ?,
       updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
     [
@@ -364,6 +377,7 @@ const updateBarangKeluar = async (id, payload, scope = null) => {
       calculation.hargaModal,
       calculation.margin,
       status,
+      authenticatedUserId,
       id,
     ]
   );

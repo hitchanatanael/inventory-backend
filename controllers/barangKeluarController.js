@@ -6,6 +6,9 @@ const {
 const {
     validateBarangKeluarPayload,
 } = require("../validators/barangKeluarValidator");
+const {
+    findForbiddenAuditFields,
+} = require("../validators/auditValidator");
 
 const buildBarangKeluarFilters = (query, scope) => {
     const filters = {};
@@ -159,6 +162,16 @@ const getBarangKeluarById = async (req, res) => {
 
 const createBarangKeluar = async (req, res) => {
     try {
+        const forbiddenAuditFields = findForbiddenAuditFields(req.body);
+
+        if (forbiddenAuditFields.length > 0) {
+            return response.error(
+                res,
+                `Field audit tidak boleh dikirim: ${forbiddenAuditFields.join(", ")}`,
+                400,
+            );
+        }
+
         const payload = resolveScopedPayload(req.body, req.locationScope);
         const validationMessage = validateBarangKeluarPayload(payload);
 
@@ -169,6 +182,7 @@ const createBarangKeluar = async (req, res) => {
         const data = await barangKeluarService.createBarangKeluar(
             payload,
             req.locationScope,
+            req.user.id,
         );
 
         if (!data) {
@@ -196,6 +210,16 @@ const createBarangKeluar = async (req, res) => {
 
 const updateBarangKeluar = async (req, res) => {
     try {
+        const forbiddenAuditFields = findForbiddenAuditFields(req.body);
+
+        if (forbiddenAuditFields.length > 0) {
+            return response.error(
+                res,
+                `Field audit tidak boleh dikirim: ${forbiddenAuditFields.join(", ")}`,
+                400,
+            );
+        }
+
         const payload = resolveScopedPayload(req.body, req.locationScope);
         const validationMessage = validateBarangKeluarPayload(payload);
 
@@ -207,6 +231,7 @@ const updateBarangKeluar = async (req, res) => {
             req.params.id,
             payload,
             req.locationScope,
+            req.user.id,
         );
 
         if (!data) {
